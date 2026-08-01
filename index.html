@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generador de exámenes en papel</title>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <style>
+        /* UI Styles (No se imprimen) */
+        body { font-family: system-ui, sans-serif; background: #f0f4f8; margin: 0; padding: 20px; }
+        .ui-panel { background: white; padding: 20px; border-radius: 8px; max-width: 900px; margin: 0 auto 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .ui-panel h1 { margin-top: 0; color: #333; font-size: 24px; }
+        label { display: block; margin-top: 15px; font-weight: bold; font-size: 14px;}
+        input, textarea, button { width: 100%; box-sizing: border-box; padding: 10px; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px;}
+        textarea { height: 180px; font-family: monospace; white-space: pre; overflow-wrap: normal; overflow-x: scroll; font-size: 12px; }
+        button { color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 15px; transition: background 0.2s;}
+        
+        /* Colores de botones */
+        .btn-random { background: #27ae60; }
+        .btn-random:hover { background: #219653; }
+        .btn-seed { background: #2980b9; }
+        .btn-seed:hover { background: #2471a3; }
+        .btn-template { background: #555; } 
+        .btn-template:hover { background: #333; }
+        
+        /* Contenedor principal (Vista Web) */
+        .print-area {
+            display: grid;
+            background: white;
+            max-width: 1100px; 
+            margin: 0 auto;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+            grid-template-columns: 1fr 1fr 1fr;
+            padding: 15px;
+            box-sizing: border-box;
+        }
+
+        /* Configuracion estricta de Impresion */
+        @media print {
+            body { padding: 0; background: white; }
+            .ui-panel { display: none !important; }
+            .print-area { 
+                box-shadow: none; 
+                width: 100%;
+                height: 100vh; 
+                padding: 0;
+                margin: 0;
+                max-height: 215mm; 
+                overflow: hidden;
+            }
+            @page { 
+                size: letter landscape; 
+                margin: 5mm; 
+            } 
+            * {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+                color-adjust: exact !important;
+            }
+        }
+
+        /* Estilos de las columnas y lineas de corte */
+        .exam-column {
+            padding: 0 8mm; 
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            height: 100%; 
+        }
+        
+        /* Lineas punteadas de recorte SOLO a la derecha de la columna 1 y 2 */
+        .exam-column:not(:last-child) {
+            border-right: 1px dashed #000;
+        }
+
+        /* Encabezado */
+        .header-cell { border-bottom: 2px solid #000; padding-bottom: 5px; margin-bottom: 5px; flex-shrink: 0; }
+        
+        /* Contenedor de preguntas */
+        .questions-container {
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1; 
+        }
+
+        /* CAJAS RÍGIDAS E IDÉNTICAS */
+        .question-cell { 
+            padding: 4px 0; 
+            flex: 1 1 0; 
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start; 
+        }
+        
+        /* Tipografia de preguntas ajustada */
+        .q-text { font-size: 8.5pt; font-weight: bold; margin-bottom: 6px; line-height: 1.1; }
+        /* Margen inferior ampliado para evitar colisión con perforaciones de 6mm */
+        .option { display: flex; align-items: flex-start; margin-bottom: 6px; font-size: 7.5pt; line-height: 1.05; }
+        .opt-letter { font-weight: bold; margin-right: 4px; width: 10px; }
+        
+        /* Circulos de OMR base (10px) */
+        .omr-circle {
+            width: 10px; height: 10px; border: 1px solid #000; border-radius: 50%;
+            margin-right: 8px; margin-top: 1px; display: inline-block; flex-shrink: 0;
+            background-color: transparent;
+        }
+
+        /* Círculos guía de registro (Esquinas superior e inferior) */
+        .guide-circle {
+            width: 10px; height: 10px; background-color: #000; border-radius: 50%; border: 1px solid #000;
+            flex-shrink: 0;
+        }
+
+        /* Recuadros de registro de versión (Con X) */
+        .reg-box { 
+            width: 12px; height: 12px; 
+            border: 1.5px solid #000; 
+            display: flex; justify-content: center; align-items: center;
+            font-size: 10px; font-weight: bold; font-family: sans-serif;
+            color: #000;
+        }
+
+        /* MODO PLANTILLA */
+        /* Opacidad al 0.45 para que sea fácil de leer pero destaque menos que los agujeros */
+        .is-template .q-text, .is-template .opt-text, .is-template .opt-letter { opacity: 0.45; } 
+        
+        /* Oculta los círculos de las respuestas incorrectas */
+        .is-template .omr-circle { border-color: transparent; }
+        
+        /* Respuesta correcta: Círculo de 24px (~6mm) como objetivo para perforadora */
+        .is-template .correct-ans .omr-circle {
+            background-color: transparent !important;
+            border: 1.5px solid #000; 
+            transform: scale(2.4); 
+            opacity: 1;
+        }
+
+        /* Círculos Guía en Plantilla: Mismo tamaño de 24px (6mm) */
+        .is-template .guide-circle {
+            background-color: transparent !important;
+            border: 1.5px solid #000;
+            transform: scale(2.4);
+            opacity: 1;
+        }
+        
+        /* Lógica para los recuadros de registro en la plantilla */
+        .is-template .header-texts { opacity: 0.45; }
+        .is-template .reg-box { border-color: transparent; } 
+        .is-template .reg-box span { display: none; } 
+        .is-template .reg-box.is-hole { border: 1.5px dashed #000; opacity: 1; } 
+    </style>
+</head>
+<body x-data="examGenerator()">
+
+    <div class="ui-panel">
+        <h1>Generador de exámenes papel</h1>
+        
+        <label>Banco de preguntas (En formato TSV con encabezado)</label>
+        <textarea x-model="tsvInput"></textarea>
+
+        <div style="display: flex; gap: 15px;">
+            <div style="flex: 2;">
+                <label>Nombre del Examen:</label>
+                <input type="text" x-model="examName" placeholder="Ej. Módulo 1">
+            </div>
+            <div style="flex: 1;">
+                <label>Semilla HEX:</label>
+                <input type="text" x-model="seedInput" placeholder="Ej. A1B2C3" maxlength="6">
+            </div>
+            <div style="flex: 1;">
+                <label>Preguntas por examen:</label>
+                <input type="number" x-model.number="numQuestions" min="2" max="10">
+            </div>
+            <div style="flex: 1;">
+                <label>Preguntas en común:</label>
+                <input type="number" x-model.number="overlap" min="0" max="10">
+            </div>
+        </div>
+
+        <div style="display: flex; gap: 15px;">
+            <!-- Botones separados para los dos flujos de trabajo -->
+            <button class="btn-random" @click="generateRandom()">1. Generar Aleatorio</button>
+            <button class="btn-seed" @click="generateSeeded()">1. Usar Semilla</button>
+            <button class="btn-template" @click="toggleTemplate()" x-show="generated" style="display: none;">
+                <span x-text="isTemplate ? '2. Ver Exámenes para Imprimir' : '2. Ver Plantillas de Calificación'"></span>
+            </button>
+        </div>
+        <p x-show="generated" style="font-size: 12px; color: #666; margin-top: 10px; display: none;">
+            * Consejo para calificar: Retira la tapa inferior de tu perforadora de legajador para ver el orificio de corte y alinear el círculo impreso antes de perforar con exactitud.
+        </p>
+    </div>
+
+    <!-- ÁREA DE IMPRESIÓN -->
+    <div class="print-area" :class="{ 'is-template': isTemplate }" x-show="generated" style="display: none;">
+        
+        <template x-for="(version, vIndex) in versions" :key="'col'+vIndex">
+            <div class="exam-column">
+                
+                <!-- ENCABEZADO -->
+                <div class="header-cell">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                        <!-- Círculo Guía Superior Izquierdo -->
+                        <div class="guide-circle"></div>
+                        <span class="header-texts" style="font-size: 8pt; font-weight: bold; margin-left: 10px; flex-grow: 1;">Nombre y código:</span>
+                        <!-- Formato: Nombre - Semilla HEX - Versión -->
+                        <span class="header-texts" x-text="(examName ? examName + '-' : '') + currentSeedHex + '-V' + (vIndex + 1)" style="font-size: 7.5pt; font-weight: bold; text-align: right;"></span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+                        <!-- Línea para escribir -->
+                        <div style="border-bottom: 1px solid black; flex-grow: 1; margin-right: 15px; height: 12px; margin-left: 20px;"></div>
+                        <!-- Cajas de verificación con clase 'is-hole' dinámica -->
+                        <div style="display: flex; gap: 4px;">
+                            <div class="reg-box" :class="{ 'is-hole': vIndex === 0 }"><span x-show="vIndex === 0">X</span></div>
+                            <div class="reg-box" :class="{ 'is-hole': vIndex === 1 }"><span x-show="vIndex === 1">X</span></div>
+                            <div class="reg-box" :class="{ 'is-hole': vIndex === 2 }"><span x-show="vIndex === 2">X</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- CONTENEDOR DE PREGUNTAS -->
+                <div class="questions-container">
+                    <template x-for="rowIndex in numQuestions" :key="'row'+rowIndex">
+                        <div class="question-cell">
+                            <div class="q-text" x-text="`${rowIndex}. ${version.questions[rowIndex-1]?.text || ''}`"></div>
+                            
+                            <template x-for="(opt, oIndex) in version.questions[rowIndex-1]?.options" :key="'opt'+oIndex">
+                                <div class="option" :class="{ 'correct-ans': opt.isCorrect }">
+                                    <div class="omr-circle"></div>
+                                    <span class="opt-letter" x-text="String.fromCharCode(97 + oIndex) + ')'"></span>
+                                    <span class="opt-text" x-text="opt.text"></span>
+                                </div>
+                            </template>
+                        </div>
+                    </template>
+                </div>
+                
+                <!-- PIE DE PÁGINA (Guía Inferior) -->
+                <div style="display: flex; padding-top: 5px; border-top: 2px solid #000; margin-top: 5px;">
+                    <!-- Círculo Guía Inferior Izquierdo -->
+                    <div class="guide-circle"></div>
+                </div>
+
+            </div>
+        </template>
+    </div>
+
+    <script>
+        document.addEventListener('alpine:init', () => {
+            Alpine.data('examGenerator', () => ({
+                examName: "El significado",
+                seedInput: "",
+                currentSeedHex: "",
+                prng: null,
+                tsvInput: `Pregunta	Índice	A	B	C	D
+Según la idea del symbolon en Aristóteles, ¿qué representan directamente las palabras habladas que decimos en voz alta?	1	Las características materiales de los objetos de la naturaleza.	Las emociones, pensamientos y estados internos de nuestra mente.	La estructura gramatical de un texto escrito en un libro.	El ruido natural del ambiente físico que nos rodea.
+Para San Agustín, ¿qué sucede en la mente humana cuando nuestros sentidos captan un signo?	2	Registramos la información física como si fuéramos una cámara sin interpretarla.	Descartamos automáticamente las impresiones que no pertenecen al lenguaje escrito.	La percepción de la cosa física nos lleva de inmediato a pensar en otra idea distinta.	Medimos la cantidad de ruido que interfirió en el canal de comunicación.
+¿Cuál es la diferencia principal entre la lengua y el habla según Saussure?	1	La lengua es escrita y el habla es exclusivamente sonora.	La lengua es el sistema social abstracto que compartimos y el habla es su uso individual.	La lengua es el mensaje decodificado y el habla es el canal técnico.	La lengua pertenece al emisor y el habla es propiedad del receptor del mensaje.
+¿Cómo se estructura un signo lingüístico según el modelo de Saussure?	1	Por la conexión directa entre la palabra y el objeto físico en el mundo real.	Mediante la relación inquebrantable entre un significante físico y un significado mental.	Por la cantidad de peso en bits que tiene la palabra en un canal digital.	A través de un representamen, un objeto dinámico y un interpretante.
+En el modelo de Peirce, ¿cuál de los tres elementos corresponde al efecto, la idea mental o la acción que el signo provoca en quien lo lee?	2	El objeto dinámico.	El ruido del canal.	El interpretante.	El soporte técnico.
+En la teoría de Charles Peirce, ¿qué determina si un signo funciona como ícono, índice o símbolo?	0	La relación específica que se establece entre el representamen y el objeto.	El grado de polisemia que el interpretante logra anclar en el mensaje.	La intención consciente que tiene el emisor al momento de enviar el mensaje.	La conexión ideológica entre la connotación y la denotación de la imagen.
+Desde la teoría de Peirce, ¿por qué un gesto inventado por ti mismo para recordar una tarea personal (como cambiar un anillo de dedo) funciona como un símbolo?	2	Porque el gesto guarda una semejanza visual con la tarea que intentas recordar.	Porque existe una conexión térmica y material de causa y efecto entre el anillo y el cerebro.	Porque su relación con la tarea depende de una regla o hábito de asociación mental.	Porque la sociedad impone recordar como un deber social.
+Al revisar un retrato corporativo para LinkedIn de un gerente con traje formal y brazos cruzados, ¿qué información pertenece al nivel de la connotación?	2	El color azul marino de la tela del traje usado por el sujeto.	La pose física de cruzar los brazos frente al pecho.	La sensación de autoridad que proyecta la imagen en el espectador.	La iluminación artificial que cae sobre el rostro del gerente.
+¿A qué se refiere Barthes cuando habla del mensaje icónico no codificado en su análisis de la fotografía?	0	A la ilusión de que la fotografía calca la realidad de forma mecánica sin añadir reglas de sentido.	Al texto lingüístico que ancla el sentido de los vegetales frescos.	A los símbolos matemáticos invisibles que permiten comprimir la imagen en internet.	A los connotadores ideológicos esparcidos por toda la composición artística.
+En la diagramación de un portal de noticias, ¿cuál es el objetivo comunicativo de poner un pie de foto (anclaje) debajo de una imagen ambigua?	1	Fomentar la polisemia de la imagen para que cada lector invente su propia historia de los hechos.	Frenar los múltiples significados posibles y guiar al lector hacia la interpretación correcta de la noticia.	Sustituir el mensaje icónico no codificado por una fórmula matemática pura.	Demostrar que los signos naturales operan sin intención de comunicar nada.
+¿Cómo interactúan los connotadores con el mensaje literal para formar la retórica de una imagen comercial?	1	Destruyen la información denotativa para reemplazarla por puro ruido técnico.	Son pequeños detalles formales dispersos que, al unirse, inyectan los valores ideológicos y culturales sobre la escena literal.	Operan como signos naturales involuntarios que el fotógrafo no pudo controlar en el set.	Se ubican exclusivamente en el texto escrito de la publicidad, abandonando completamente la sustancia visual de la fotografía.`,
+                numQuestions: 4,
+                overlap: 2,
+                generated: false,
+                isTemplate: false,
+                versions: [], 
+
+                // Configura el generador matemático con la semilla HEX
+                seedPRNG(hexSeed) {
+                    let seedState = parseInt(hexSeed, 16);
+                    if (isNaN(seedState)) seedState = 123456;
+                    
+                    // Algoritmo Mulberry32
+                    this.prng = function() {
+                        let t = seedState += 0x6D2B79F5;
+                        t = Math.imul(t ^ t >>> 15, t | 1);
+                        t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+                        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+                    };
+                },
+
+                parseData(str) {
+                    const parsed = Papa.parse(str.trim(), {
+                        delimiter: '	', 
+                        skipEmptyLines: true
+                    });
+                    
+                    let rows = parsed.data;
+                    if (rows.length > 0 && rows[0][0].toLowerCase().trim() === 'pregunta') {
+                        rows.shift();
+                    }
+
+                    return rows.map(parts => {
+                        return {
+                            text: parts[0] ? parts[0].trim() : "",
+                            correctIdx: parseInt(parts[1]),
+                            options: parts.slice(2).map(o => o ? o.trim() : "")
+                        };
+                    }).filter(q => q.text !== ""); 
+                },
+
+                shuffle(array) {
+                    let currentIndex = array.length, randomIndex;
+                    while (currentIndex != 0) {
+                        randomIndex = Math.floor(this.prng() * currentIndex);
+                        currentIndex--;
+                        [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
+                    }
+                    return array;
+                },
+
+                generateRandom() {
+                    // Limpia la semilla para forzar una aleatoria nueva
+                    this.seedInput = "";
+                    this.generate();
+                },
+
+                generateSeeded() {
+                    let hexRegex = /^[0-9A-Fa-f]+$/;
+                    if (!this.seedInput.trim() || !hexRegex.test(this.seedInput.trim())) {
+                        alert("Por favor, ingresa una semilla HEX válida (ej. A1B2C3) para usar esta opción.");
+                        return;
+                    }
+                    this.generate();
+                },
+
+                generate() {
+                    const pool = this.parseData(this.tsvInput);
+                    if(pool.length < this.numQuestions) {
+                        alert("El banco debe tener al menos tantas preguntas como el examen.");
+                        return;
+                    }
+
+                    let hexRegex = /^[0-9A-Fa-f]+$/;
+                    let inputSeed = this.seedInput.trim();
+                    
+                    // Si viene vacía (de generar aleatorio), crea una
+                    if (!inputSeed || !hexRegex.test(inputSeed)) {
+                        inputSeed = Math.floor(Math.random() * 0xFFFFFF).toString(16).toUpperCase().padStart(6, '0');
+                        this.seedInput = inputSeed; 
+                    }
+                    
+                    this.currentSeedHex = inputSeed.toUpperCase();
+                    this.seedPRNG(this.currentSeedHex);
+
+                    this.shuffle(pool);
+                    
+                    const sharedQuestions = pool.slice(0, this.overlap);
+                    const remainingPool = pool.slice(this.overlap);
+                    const neededExtra = this.numQuestions - this.overlap;
+                    
+                    let qV1 = [...sharedQuestions, ...remainingPool.slice(0, neededExtra)];
+                    let qV2 = [...sharedQuestions, ...remainingPool.slice(neededExtra, neededExtra * 2)];
+                    let qV3 = [...sharedQuestions, ...remainingPool.slice(neededExtra * 2, neededExtra * 3)];
+
+                    const fillVersion = (versionArray) => {
+                        let i = 0;
+                        while(versionArray.length < this.numQuestions) {
+                            if(!versionArray.includes(pool[i])) {
+                                versionArray.push(pool[i]);
+                            }
+                            i++;
+                        }
+                        return versionArray;
+                    };
+
+                    qV1 = fillVersion(qV1);
+                    qV2 = fillVersion(qV2);
+                    qV3 = fillVersion(qV3);
+
+                    const rawVersions = [qV1, qV2, qV3];
+                    this.versions = [];
+
+                    rawVersions.forEach((rawQuestions) => {
+                        let finalQuestions = [];
+                        
+                        this.shuffle([...rawQuestions]).forEach(q => {
+                            let mappedOptions = q.options.map((optText, idx) => ({
+                                text: optText,
+                                isCorrect: idx === q.correctIdx
+                            }));
+                            
+                            this.shuffle(mappedOptions);
+                            
+                            finalQuestions.push({
+                                text: q.text,
+                                options: mappedOptions
+                            });
+                        });
+                        this.versions.push({ questions: finalQuestions });
+                    });
+
+                    this.generated = true;
+                    this.isTemplate = false;
+                },
+
+                toggleTemplate() {
+                    this.isTemplate = !this.isTemplate;
+                }
+            }));
+        });
+    </script>
+</body>
+</html>
